@@ -35,7 +35,33 @@ export default function SeatPicker() {
             setLoading(false)
         }
 
-        if (id) loadData()
+        if (id) {
+            loadData()
+
+            // Subscribe to real-time changes on the seats table for this schedule
+            const channel = supabase
+                .channel('seats_changes')
+                .on('postgres_changes',
+                    {
+                        event: 'UPDATE',
+                        schema: 'public',
+                        table: 'seats',
+                        filter: `schedule_id=eq.${id}`
+                    },
+                    (payload) => {
+                        // Instantly update the seat status in the UI without a page refresh
+                        setSeats(currentSeats =>
+                            currentSeats.map(seat =>
+                                seat.id === payload.new.id ? { ...seat, is_booked: payload.new.is_booked } : seat
+                            )
+                        )
+                    })
+                .subscribe()
+
+            return () => {
+                supabase.removeChannel(channel)
+            }
+        }
     }, [id])
 
     if (loading) return <main style={{ padding: '2rem' }}>Loading seats...</main>
@@ -43,7 +69,9 @@ export default function SeatPicker() {
 
     // Group seats by row for the grid view
     // We extract the number part from the seat label (e.g. "1A" -> "1")
-    const rows = new Set(seats.map(s => s.seat_number.match(/\d+/)?.[0]))
+    const rows = Array.from(
+        new Set(seats.map(s => s.seat_number.match(/\d+/)?.[0]))
+    ).sort((a, b) => parseInt(a!) - parseInt(b!))
 
     return (
         <main style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto', fontFamily: 'system-ui' }}>
@@ -58,8 +86,8 @@ export default function SeatPicker() {
                 <div style={{ padding: '10px 40px', background: '#cbd5e1', borderRadius: '8px', marginBottom: '1rem' }}>FRONT OF BUS</div>
 
                 {Array.from(rows).map((rowNum) => {
-                    // Get the 4 seats for this row (A, B, C, D)
-                    const rowSeats = seats.filter(s => s.seat_number.startsWith(rowNum as string))
+                    // Get the 4 seats for this row (A, B, C, D) using exact number match, not startsWith
+                    const rowSeats = seats.filter(s => s.seat_number.match(/\d+/)?.[0] === rowNum)
 
                     return (
                         <div key={rowNum} style={{ display: 'flex', gap: '0.5rem', width: '100%', justifyContent: 'center' }}>
