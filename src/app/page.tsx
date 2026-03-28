@@ -16,9 +16,13 @@ export default function Home() {
   // Fetch cities when the page loads
   useEffect(() => {
     async function fetchCities() {
-      const res = await fetch('/api/cities')
-      const data = await res.json()
-      setCities(data)
+      try {
+        const res = await fetch('/api/cities')
+        const data = await res.json()
+        if (Array.isArray(data)) setCities(data)
+      } catch (err) {
+        console.error('Failed to load cities:', err)
+      }
     }
     fetchCities()
   }, [])
@@ -27,6 +31,7 @@ export default function Home() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault() // Prevents the page from refreshing
     if (!from || !to || !date) return alert("Please fill all fields")
+    if (from === to) return alert("Origin and destination cannot be the same")
 
     // Redirect to the search results page with our selections in the URL
     router.push(`/search?from=${from}&to=${to}&date=${date}&type=${tripType}`)

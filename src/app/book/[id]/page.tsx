@@ -15,10 +15,10 @@ export default function SeatPicker() {
 
     useEffect(() => {
         async function loadData() {
-            // 1. Load the schedule info
+            // 1. Load the schedule info WITH the route price
             const { data: schedData } = await supabase
                 .from('schedules')
-                .select('*, buses(*), routes(origin:cities!routes_origin_id_fkey(name), destination:cities!routes_destination_id_fkey(name))')
+                .select('*, buses(*), routes(base_price_etb, origin:cities!routes_origin_id_fkey(name), destination:cities!routes_destination_id_fkey(name))')
                 .eq('id', id)
                 .single()
 
@@ -130,7 +130,7 @@ export default function SeatPicker() {
                 </div>
                 <button
                     disabled={!selectedSeat}
-                    onClick={() => alert(`Next step: Payment for seat ${selectedSeat}`)}
+                    onClick={() => router.push(`/book/${id}/confirm?seat=${selectedSeat}&price=${schedule.routes.base_price_etb}`)}
                     style={{ padding: '12px 24px', background: selectedSeat ? '#2563eb' : '#94a3b8', color: 'white', border: 'none', borderRadius: '4px', cursor: selectedSeat ? 'pointer' : 'not-allowed' }}
                 >
                     Continue
