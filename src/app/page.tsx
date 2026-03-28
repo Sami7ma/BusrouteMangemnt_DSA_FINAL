@@ -84,6 +84,13 @@ export default function Home() {
           Search Buses
         </button>
       </form>
+      <button
+        onClick={() => router.push('/my-bookings')}
+        style={{ marginTop: '1rem', padding: '10px', background: 'transparent', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer', width: '100%' }}
+      >
+        📋 My Bookings
+      </button>
+
     </main>
   )
 }
