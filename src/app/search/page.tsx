@@ -19,9 +19,11 @@ export default function SearchResults() {
         async function fetchSchedules() {
             if (!from || !to || !date) return
 
-            const res = await fetch(`/api/routes/search?from=${from}&to=${to}&date=${date}&type=${type}`)
+            const res = await fetch(`/api/routes/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${date}&type=${type}`)
             const data = await res.json()
-            setSchedules(data)
+            // Filter out any results where the route join didn't match (Supabase quirk)
+            const valid = Array.isArray(data) ? data.filter((s: any) => s.routes?.origin?.name && s.routes?.destination?.name) : []
+            setSchedules(valid)
             setLoading(false)
         }
 
