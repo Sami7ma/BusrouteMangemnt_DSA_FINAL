@@ -65,6 +65,9 @@ export default function ConfirmBooking() {
                     required
                     style={{ padding: '10px', fontSize: '1rem' }}
                 />
+                <p style={{ color: '#d97706', fontSize: '0.85rem', marginBottom: '-0.5rem' }}>
+                    ⚠️ Please complete payment promptly. Unpaid seats may be released.
+                </p>
                 <button
                     type="submit"
                     disabled={loading}

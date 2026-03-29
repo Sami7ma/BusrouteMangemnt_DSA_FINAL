@@ -43,19 +43,23 @@ export async function POST(req: NextRequest) {
     // 4. Determine refund percentage based on our policy
     let refundPercent = 0
     let refundMessage = ''
+    let refundAmount = 0
 
-    if (hoursUntil > 24) {
-        refundPercent = 90
-        refundMessage = 'Full refund (90%) — more than 24 hours before departure'
-    } else if (hoursUntil > 6) {
-        refundPercent = 50
-        refundMessage = 'Partial refund (50%) — 6-24 hours before departure'
+    if (booking.payment_status === 'PENDING') {
+        refundMessage = 'Cancelled unpaid booking. No refund needed.'
     } else {
-        refundPercent = 0
-        refundMessage = 'No refund — less than 6 hours before departure'
+        if (hoursUntil > 24) {
+            refundPercent = 90
+            refundMessage = 'Full refund (90%) — more than 24 hours before departure'
+        } else if (hoursUntil > 6) {
+            refundPercent = 50
+            refundMessage = 'Partial refund (50%) — 6-24 hours before departure'
+        } else {
+            refundPercent = 0
+            refundMessage = 'No refund — less than 6 hours before departure'
+        }
+        refundAmount = Math.round(booking.price_etb * (refundPercent / 100))
     }
-
-    const refundAmount = Math.round(booking.price_etb * (refundPercent / 100))
 
     // 5. Update booking to CANCELLED
     await supabaseAdmin

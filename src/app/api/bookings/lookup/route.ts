@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     // Get all their bookings
     const { data: bookings } = await supabaseAdmin
         .from('bookings')
-        .select('*, seats(seat_number, seat_type)')
+        .select('*, seats(seat_number, seat_type, schedules(departure_date, departure_time))')
         .eq('passenger_id', passenger.id)
         .order('booked_at', { ascending: false })
 

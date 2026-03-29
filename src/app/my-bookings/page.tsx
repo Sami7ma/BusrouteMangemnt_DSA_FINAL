@@ -52,49 +52,53 @@ export default function MyBookings() {
             )}
 
             {bookings.map(b => {
+                const schedule = b.seats?.schedules
+                const isExpired = schedule && new Date(`${schedule.departure_date}T23:59:59`) < new Date()
                 const isCancelled = b.status === 'CANCELLED'
-                const isPaid = b.payment_status === 'PAID'
 
-                const cardBg = isCancelled ? '#fef2f2' : isPaid ? '#f0fdf4' : '#fef9c3'
-                const cardBorder = isCancelled ? '#fca5a5' : isPaid ? '#86efac' : '#fde68a'
-                const statusColor = isCancelled ? '#dc2626' : isPaid ? '#16a34a' : '#ca8a04'
-                const statusLabel = isCancelled ? '❌ Cancelled' : isPaid ? '✅ Paid' : '⏳ Pending'
+                let boxColor = '#fef9c3' // warning yellow for pending
+                if (isCancelled) boxColor = '#fef2f2' // soft red
+                else if (isExpired) boxColor = '#f3f4f6' // gray
+                else if (b.payment_status === 'PAID') boxColor = '#f0fdf4' // soft green
 
                 return (
                     <div key={b.id} style={{
-                        border: `1px solid ${cardBorder}`,
-                        borderRadius: '10px',
-                        padding: '1rem 1.25rem',
-                        marginBottom: '1rem',
-                        background: cardBg,
-                        opacity: isCancelled ? 0.75 : 1,
+                        border: '1px solid #ddd', borderRadius: '8px', padding: '1rem', marginBottom: '1rem',
+                        background: boxColor,
+                        opacity: isExpired || isCancelled ? 0.7 : 1
                     }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
-                                <p style={{ margin: '0 0 0.2rem', fontFamily: 'monospace', fontWeight: 'bold', fontSize: '1rem' }}>
-                                    {b.booking_ref}
+                                <strong>{b.booking_ref}</strong>
+                                <p style={{ margin: '0.25rem 0', color: '#666' }}>
+                                    Seat {b.seats?.seat_number} • {b.price_etb} ETB
                                 </p>
-                                <p style={{ margin: '0 0 0.2rem', color: '#555', fontSize: '0.9rem' }}>
-                                    Seat {b.seats?.seat_number} • <strong>{b.price_etb} ETB</strong>
-                                </p>
-                                <p style={{ margin: 0, fontSize: '0.8rem', color: '#888' }}>
+                                <p style={{ margin: 0, fontSize: '0.85rem', color: '#888' }}>
                                     {b.seat_traveller_name} • {new Date(b.booked_at).toLocaleDateString()}
                                 </p>
                             </div>
-                            <span style={{ color: statusColor, fontWeight: 'bold', fontSize: '0.8rem', whiteSpace: 'nowrap', paddingLeft: '0.5rem' }}>
-                                {statusLabel}
-                            </span>
-                        </div>
+                            <div style={{ textAlign: 'right' }}>
+                                <span style={{
+                                    color: isCancelled ? '#dc2626' : isExpired ? '#6b7280' : b.payment_status === 'PAID' ? '#16a34a' : '#ca8a04',
+                                    fontWeight: 'bold', fontSize: '0.85rem'
+                                }}>
+                                    {isCancelled ? '❌ CANCELLED' : isExpired ? '🕒 EXPIRED' : b.payment_status === 'PAID' ? '✅ PAID' : '⏳ PENDING'}
+                                </span>
 
-                        {!isCancelled && (
-                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                                <br />
                                 <button
                                     onClick={() => router.push(`/ticket/${b.booking_ref}`)}
-                                    style={{ flex: 1, padding: '7px 0', background: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}
+                                    // Ghost out the button if it's inactive, but still keep it clickable to see the receipt.
+                                    style={{
+                                        marginTop: '0.5rem', padding: '6px 12px',
+                                        background: isCancelled || isExpired ? '#e5e7eb' : '#2563eb',
+                                        color: isCancelled || isExpired ? '#4b5563' : 'white',
+                                        border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem'
+                                    }}
                                 >
-                                    View Ticket
+                                    View Receipt
                                 </button>
-                                {isPaid && (
+                                {!isCancelled && !isExpired && (
                                     <button
                                         onClick={async () => {
                                             if (!confirm('Are you sure you want to cancel this booking?')) return
@@ -105,26 +109,22 @@ export default function MyBookings() {
                                             })
                                             const data = await res.json()
                                             if (data.success) {
-                                                alert(`Booking cancelled.\n${data.refundMessage}\nRefund amount: ${data.refundAmount} ETB`)
+                                                alert(`Cancelled!\n${data.refundMessage}\nRefund: ${data.refundAmount} ETB`)
+                                                // Refresh the bookings list
                                                 const refreshRes = await fetch(`/api/bookings/lookup?phone=${phone}`)
                                                 setBookings(await refreshRes.json())
                                             } else {
                                                 alert('Error: ' + data.error)
                                             }
                                         }}
-                                        style={{ flex: 1, padding: '7px 0', background: '#dc2626', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}
+                                        style={{ marginTop: '0.25rem', padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
                                     >
                                         Cancel
                                     </button>
                                 )}
-                            </div>
-                        )}
 
-                        {isCancelled && b.cancelled_at && (
-                            <p style={{ margin: '0.5rem 0 0', fontSize: '0.78rem', color: '#dc2626' }}>
-                                Cancelled on {new Date(b.cancelled_at).toLocaleString()}
-                            </p>
-                        )}
+                            </div>
+                        </div>
                     </div>
                 )
             })}
