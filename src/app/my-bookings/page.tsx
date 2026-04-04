@@ -98,7 +98,7 @@ export default function MyBookings() {
                                 >
                                     View Receipt
                                 </button>
-                                {!isCancelled && !isExpired && (
+                                {!isCancelled && !isExpired && b.payment_status === 'PAID' && (
                                     <button
                                         onClick={async () => {
                                             if (!confirm('Are you sure you want to cancel this booking?')) return

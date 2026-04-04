@@ -8,24 +8,40 @@ export default function TicketPage() {
     const { ref } = useParams()
     const [booking, setBooking] = useState<any>(null)
     const [loading, setLoading] = useState(true)
+    const [verifying, setVerifying] = useState(false)
 
-    useEffect(() => {
-        async function loadBooking() {
-            const { data } = await supabase
-                .from('bookings')
-                .select(`
+    async function loadBooking() {
+        const { data } = await supabase
+            .from('bookings')
+            .select(`
           *,
-          seats ( seat_number, seat_type ),
+          seats ( seat_number, seat_type, schedules(departure_date, departure_time) ),
           passengers ( full_name, phone )
         `)
-                .eq('booking_ref', ref)
-                .single()
+            .eq('booking_ref', ref)
+            .single()
 
-            setBooking(data)
-            setLoading(false)
-        }
+        setBooking(data)
+        setLoading(false)
+    }
+
+    useEffect(() => {
         if (ref) loadBooking()
     }, [ref])
+
+    const handleVerify = async () => {
+        setVerifying(true)
+        const res = await fetch(`/api/bookings/verify?ref=${ref}`)
+        const data = await res.json()
+
+        if (data.status === 'paid' || data.status === 'already_paid') {
+            alert('✅ Payment confirmed!')
+            await loadBooking() // Reload to refresh the status
+        } else {
+            alert('⏳ Payment not yet received. Try again in a moment.')
+        }
+        setVerifying(false)
+    }
 
     if (loading) return <main style={{ padding: '2rem' }}>Loading ticket...</main>
     if (!booking) return <main style={{ padding: '2rem' }}>Booking not found.</main>
@@ -94,7 +110,22 @@ export default function TicketPage() {
 
             </div>
 
-            {!isCancelled && !isExpired && (
+            {/* Show verify button if payment is still pending */}
+            {!isPaid && !isCancelled && !isExpired && (
+                <button
+                    onClick={handleVerify}
+                    disabled={verifying}
+                    style={{
+                        marginTop: '1.5rem', padding: '12px 24px', width: '100%',
+                        background: '#2563eb', color: 'white', border: 'none',
+                        borderRadius: '8px', cursor: 'pointer', fontSize: '1rem'
+                    }}
+                >
+                    {verifying ? 'Checking with Chapa...' : '🔄 Verify Payment'}
+                </button>
+            )}
+
+            {!isCancelled && !isExpired && isPaid && (
                 <p style={{ marginTop: '2rem', color: '#666', fontSize: '0.9rem' }}>
                     Show this ticket to the conductor when boarding.
                 </p>

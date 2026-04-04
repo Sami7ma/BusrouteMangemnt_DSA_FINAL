@@ -43,17 +43,8 @@ export default function Home() {
 
       <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '2rem' }}>
 
-        {/* Trip Type Toggle */}
-        <div>
-          <label>
-            <input type="radio" checked={tripType === 'ONE_WAY'} onChange={() => setTripType('ONE_WAY')} />
-            One Way
-          </label>
-          <label style={{ marginLeft: '1rem' }}>
-            <input type="radio" checked={tripType === 'ROUND_TRIP'} onChange={() => setTripType('ROUND_TRIP')} />
-            Round Trip
-          </label>
-        </div>
+        {/* Trip Type — Round Trip hidden until implemented */}
+        <input type="hidden" value={tripType} />
 
         {/* Origin */}
         <select value={from} onChange={(e) => setFrom(e.target.value)} required style={{ padding: '10px' }}>
