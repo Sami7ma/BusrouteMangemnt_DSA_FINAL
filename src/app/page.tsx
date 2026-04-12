@@ -5,15 +5,12 @@ import { useRouter } from 'next/navigation'
 
 export default function Home() {
   const router = useRouter()
-
-  // State for our form and data
   const [cities, setCities] = useState<{ id: string, name: string }[]>([])
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [date, setDate] = useState('')
-  const [tripType, setTripType] = useState('ONE_WAY')
+  const [ready, setReady] = useState(false)
 
-  // Fetch cities when the page loads
   useEffect(() => {
     async function fetchCities() {
       try {
@@ -25,63 +22,119 @@ export default function Home() {
       }
     }
     fetchCities()
+    setTimeout(() => setReady(true), 100)
   }, [])
 
-  // Handle the search button click
   const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault() // Prevents the page from refreshing
+    e.preventDefault()
     if (!from || !to || !date) return alert("Please fill all fields")
     if (from === to) return alert("Origin and destination cannot be the same")
-
-    // Redirect to the search results page with our selections in the URL
-    router.push(`/search?from=${from}&to=${to}&date=${date}&type=${tripType}`)
+    router.push(`/book?from=${from}&to=${to}&date=${date}&type=ONE_WAY`)
   }
 
+  // Set minimum date to today
+  const today = new Date().toISOString().split('T')[0]
+
   return (
-    <main style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto', fontFamily: 'system-ui' }}>
-      <h1>🚌 Book a Ticket</h1>
+    <div className="hero">
+      {/* Background Image */}
+      <div className="hero-bg">
+        <img src="/bus-aerial.jpg" alt="Ethiopian landscape" />
+      </div>
+      <div className="hero-overlay" />
 
-      <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '2rem' }}>
+      {/* Content */}
+      <div className="hero-content">
+        {/* Logo / Brand */}
+        <div className={`${ready ? 'animate-in' : ''}`} style={{ opacity: ready ? 1 : 0, marginBottom: '0.5rem' }}>
+          <p style={{ color: 'var(--gold)', fontFamily: 'Outfit', fontWeight: 600, fontSize: '0.9rem', letterSpacing: '3px', textTransform: 'uppercase' }}>
+            Bemengede
+          </p>
+        </div>
 
-        {/* Trip Type — Round Trip hidden until implemented */}
-        <input type="hidden" value={tripType} />
+        <h1 className={`${ready ? 'animate-in animate-in-delay-1' : ''}`} style={{
+          opacity: ready ? 1 : 0,
+          fontSize: 'clamp(2rem, 6vw, 3.2rem)',
+          lineHeight: 1.15,
+          marginBottom: '0.75rem',
+          background: 'linear-gradient(135deg, #FFFFFF 0%, #94A3B8 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+        }}>
+          Travel Ethiopia<br />Your Way
+        </h1>
 
-        {/* Origin */}
-        <select value={from} onChange={(e) => setFrom(e.target.value)} required style={{ padding: '10px' }}>
-          <option value="">Leaving from...</option>
-          {cities.map(city => (
-            <option key={city.id} value={city.name}>{city.name}</option>
-          ))}
-        </select>
+        <p className={`${ready ? 'animate-in animate-in-delay-2' : ''}`} style={{
+          opacity: ready ? 1 : 0,
+          color: 'var(--text-muted)',
+          fontSize: '1rem',
+          marginBottom: '2.5rem',
+          maxWidth: '380px'
+        }}>
+          Book bus tickets across the country. Pick your seat, pay online, and go.
+        </p>
 
-        {/* Destination */}
-        <select value={to} onChange={(e) => setTo(e.target.value)} required style={{ padding: '10px' }}>
-          <option value="">Going to...</option>
-          {cities.map(city => (
-            <option key={city.id} value={city.name}>{city.name}</option>
-          ))}
-        </select>
+        {/* Search Card */}
+        <form onSubmit={handleSearch} className={`glass ${ready ? 'animate-in animate-in-delay-3' : ''}`} style={{
+          opacity: ready ? 1 : 0,
+          padding: '1.75rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1rem',
+        }}>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+                📍 From
+              </label>
+              <select className="select" value={from} onChange={(e) => setFrom(e.target.value)} required>
+                <option value="">Select city</option>
+                {cities.map(city => (
+                  <option key={city.id} value={city.name}>{city.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+                📍 To
+              </label>
+              <select className="select" value={to} onChange={(e) => setTo(e.target.value)} required>
+                <option value="">Select city</option>
+                {cities.map(city => (
+                  <option key={city.id} value={city.name}>{city.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-        {/* Date */}
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          required
-          style={{ padding: '10px' }}
-        />
+          <div>
+            <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+              📅 Travel Date
+            </label>
+            <input
+              className="input"
+              type="date"
+              value={date}
+              min={today}
+              onChange={(e) => setDate(e.target.value)}
+              required
+            />
+          </div>
 
-        <button type="submit" style={{ padding: '12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-          Search Buses
+          <button type="submit" className="btn btn-gold btn-full" style={{ marginTop: '0.5rem' }}>
+            Search Buses →
+          </button>
+        </form>
+
+        {/* My Bookings Link */}
+        <button
+          onClick={() => router.push('/my-bookings')}
+          className={`btn btn-outline btn-full ${ready ? 'animate-in animate-in-delay-4' : ''}`}
+          style={{ opacity: ready ? 1 : 0, marginTop: '1rem' }}
+        >
+          📋 My Bookings
         </button>
-      </form>
-      <button
-        onClick={() => router.push('/my-bookings')}
-        style={{ marginTop: '1rem', padding: '10px', background: 'transparent', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer', width: '100%' }}
-      >
-        📋 My Bookings
-      </button>
-
-    </main>
+      </div>
+    </div>
   )
 }

@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 export default function TicketPage() {
     const { ref } = useParams()
+    const router = useRouter()
     const [booking, setBooking] = useState<any>(null)
     const [loading, setLoading] = useState(true)
     const [verifying, setVerifying] = useState(false)
@@ -14,13 +15,12 @@ export default function TicketPage() {
         const { data } = await supabase
             .from('bookings')
             .select(`
-          *,
-          seats ( seat_number, seat_type, schedules(departure_date, departure_time) ),
-          passengers ( full_name, phone )
-        `)
+              *,
+              seats ( seat_number, seat_type, schedules(departure_date, departure_time) ),
+              passengers ( full_name, phone )
+            `)
             .eq('booking_ref', ref)
             .single()
-
         setBooking(data)
         setLoading(false)
     }
@@ -33,103 +33,142 @@ export default function TicketPage() {
         setVerifying(true)
         const res = await fetch(`/api/bookings/verify?ref=${ref}`)
         const data = await res.json()
-
         if (data.status === 'paid' || data.status === 'already_paid') {
             alert('✅ Payment confirmed!')
-            await loadBooking() // Reload to refresh the status
+            await loadBooking()
         } else {
             alert('⏳ Payment not yet received. Try again in a moment.')
         }
         setVerifying(false)
     }
 
-    if (loading) return <main style={{ padding: '2rem' }}>Loading ticket...</main>
-    if (!booking) return <main style={{ padding: '2rem' }}>Booking not found.</main>
+    if (loading) return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="skeleton" style={{ width: '350px', height: '500px' }} />
+        </div>
+    )
+
+    if (!booking) return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
+            <p style={{ fontSize: '3rem' }}>🔍</p>
+            <h2>Booking not found</h2>
+            <p style={{ color: 'var(--text-muted)' }}>Check your booking reference and try again.</p>
+            <button className="btn btn-outline" onClick={() => router.push('/')}>← Go Home</button>
+        </div>
+    )
 
     const isPaid = booking.payment_status === 'PAID'
     const isCancelled = booking.status === 'CANCELLED'
-    
-    // Check if the trip is in the past (expires at end of departure date)
     const schedule = booking.seats?.schedules
     const isExpired = schedule && new Date(`${schedule.departure_date}T23:59:59`) < new Date()
 
-    let boxColor = '#fef9c3'
-    let borderColor = '#ca8a04'
-    let statusTextColor = '#ca8a04'
-    let statusText = '⏳ PAYMENT PENDING'
+    let badgeClass = 'badge-pending'
+    let statusText = '⏳ Payment Pending'
+    let accentColor = 'var(--gold)'
 
     if (isCancelled) {
-        boxColor = '#fef2f2'
-        borderColor = '#dc2626'
-        statusTextColor = '#dc2626'
-        statusText = '❌ CANCELLED'
+        badgeClass = 'badge-cancelled'
+        statusText = '❌ Cancelled'
+        accentColor = 'var(--danger)'
     } else if (isExpired) {
-        boxColor = '#f3f4f6'
-        borderColor = '#6b7280'
-        statusTextColor = '#6b7280'
-        statusText = '🕒 EXPIRED'
+        badgeClass = 'badge-expired'
+        statusText = '🕒 Expired'
+        accentColor = 'var(--text-muted)'
     } else if (isPaid) {
-        boxColor = '#f0fdf4'
-        borderColor = '#16a34a'
-        statusTextColor = '#16a34a'
-        statusText = '✅ PAID'
+        badgeClass = 'badge-paid'
+        statusText = '✅ Paid'
+        accentColor = 'var(--success)'
+    }
+
+    const infoRows = [
+        { label: 'Passenger', value: booking.seat_traveller_name },
+        { label: 'Phone', value: booking.passengers?.phone },
+        { label: 'Seat', value: `${booking.seats?.seat_number} (${booking.seats?.seat_type})` },
+        { label: 'Price', value: `${booking.price_etb} ETB` },
+        { label: 'Trip', value: booking.trip_type },
+        { label: 'Booked', value: new Date(booking.booked_at).toLocaleString() },
+    ]
+
+    if (booking.chapa_tx_ref) {
+        infoRows.push({ label: 'Payment Ref', value: booking.chapa_tx_ref })
     }
 
     return (
-        <main style={{ padding: '2rem', maxWidth: '500px', margin: '0 auto', fontFamily: 'system-ui', textAlign: 'center' }}>
-            <h1 style={{ fontSize: '2rem' }}>🎫</h1>
-            <h2>{isCancelled || isExpired ? 'Ticket Receipt' : 'Your Ticket'}</h2>
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1.5rem' }}>
+            <div style={{ width: '100%', maxWidth: '420px' }}>
+                {/* Back */}
+                <button className="back-btn animate-in" onClick={() => router.push('/')} style={{ marginBottom: '1.5rem' }}>
+                    ← Home
+                </button>
 
-            <div style={{
-                background: boxColor,
-                border: `2px solid ${borderColor}`,
-                borderRadius: '12px',
-                padding: '2rem',
-                marginTop: '1rem',
-                opacity: isCancelled || isExpired ? 0.8 : 1
-            }}>
-                <p style={{ fontSize: '1.2rem', color: statusTextColor, fontWeight: 'bold' }}>
-                    {statusText}
-                </p>
+                {/* Ticket Card */}
+                <div className="glass animate-in animate-in-delay-1" style={{
+                    padding: '2rem',
+                    textAlign: 'center',
+                    opacity: isCancelled || isExpired ? 0.75 : 1,
+                    borderColor: accentColor,
+                }}>
+                    {/* Header */}
+                    <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '0.85rem', color: 'var(--gold)', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+                        BEMENGEDE
+                    </p>
 
-                <h3 style={{ margin: '1rem 0 0.5rem', fontSize: '1.5rem', textDecoration: isCancelled ? 'line-through' : 'none' }}>
-                    {booking.booking_ref}
-                </h3>
+                    <div className={`badge ${badgeClass}`} style={{ marginBottom: '1rem' }}>
+                        {statusText}
+                    </div>
 
-                <div style={{ textAlign: 'left', marginTop: '1.5rem', lineHeight: '2' }}>
-                    <p><strong>Passenger:</strong> {booking.seat_traveller_name}</p>
-                    <p><strong>Phone:</strong> {booking.passengers?.phone}</p>
-                    <p><strong>Seat:</strong> {booking.seats?.seat_number} ({booking.seats?.seat_type})</p>
-                    <p><strong>Price:</strong> {booking.price_etb} ETB</p>
-                    <p><strong>Trip:</strong> {booking.trip_type}</p>
-                    <p><strong>Booked:</strong> {new Date(booking.booked_at).toLocaleString()}</p>
-                    {booking.chapa_tx_ref && (
-                        <p><strong>Payment Ref:</strong> {booking.chapa_tx_ref}</p>
-                    )}
+                    <h2 style={{
+                        fontSize: '1.6rem',
+                        marginBottom: '0.25rem',
+                        textDecoration: isCancelled ? 'line-through' : 'none',
+                        color: isCancelled ? 'var(--text-muted)' : 'var(--text)',
+                    }}>
+                        {booking.booking_ref}
+                    </h2>
+
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                        {isCancelled || isExpired ? 'Receipt' : 'Ticket'}
+                    </p>
+
+                    {/* Tear line */}
+                    <div className="ticket-tear" style={{ margin: '0 -2rem', marginBottom: '1.5rem' }}>
+                        <div className="ticket-tear-line" />
+                    </div>
+
+                    {/* Info rows */}
+                    <div style={{ textAlign: 'left' }}>
+                        {infoRows.map((row, i) => (
+                            <div key={row.label} className={`animate-in animate-in-delay-${Math.min(i + 2, 5)}`} style={{
+                                display: 'flex', justifyContent: 'space-between',
+                                padding: '10px 0',
+                                borderBottom: i < infoRows.length - 1 ? '1px solid var(--card-border)' : 'none',
+                            }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{row.label}</span>
+                                <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>{row.value}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
 
+                {/* Verify Button */}
+                {!isPaid && !isCancelled && !isExpired && (
+                    <button
+                        onClick={handleVerify}
+                        disabled={verifying}
+                        className="btn btn-gold btn-full animate-in animate-in-delay-4"
+                        style={{ marginTop: '1rem' }}
+                    >
+                        {verifying ? 'Checking with Chapa...' : '🔄 Verify Payment'}
+                    </button>
+                )}
+
+                {/* Boarding message */}
+                {isPaid && !isCancelled && !isExpired && (
+                    <p className="animate-in animate-in-delay-5" style={{ textAlign: 'center', marginTop: '1.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        Show this ticket to the conductor when boarding.
+                    </p>
+                )}
             </div>
-
-            {/* Show verify button if payment is still pending */}
-            {!isPaid && !isCancelled && !isExpired && (
-                <button
-                    onClick={handleVerify}
-                    disabled={verifying}
-                    style={{
-                        marginTop: '1.5rem', padding: '12px 24px', width: '100%',
-                        background: '#2563eb', color: 'white', border: 'none',
-                        borderRadius: '8px', cursor: 'pointer', fontSize: '1rem'
-                    }}
-                >
-                    {verifying ? 'Checking with Chapa...' : '🔄 Verify Payment'}
-                </button>
-            )}
-
-            {!isCancelled && !isExpired && isPaid && (
-                <p style={{ marginTop: '2rem', color: '#666', fontSize: '0.9rem' }}>
-                    Show this ticket to the conductor when boarding.
-                </p>
-            )}
-        </main>
+        </div>
     )
 }
