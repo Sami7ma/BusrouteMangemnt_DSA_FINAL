@@ -260,24 +260,55 @@ a {
   border-radius: var(--radius-sm);
 }
 
-/* ─── STEP TRANSITIONS ──────────────────────────────────── */
+/* ─── STEP TRANSITIONS (movie-like slide) ───────────────── */
 
 .step-container {
   position: relative;
   min-height: calc(100vh - 80px);
+  overflow: hidden;
 }
 
 .step {
-  animation: fadeInUp 0.5s ease-out both;
+  animation: slideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.step-exit {
-  animation: fadeOut 0.3s ease-in both;
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(80px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
-@keyframes fadeOut {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(-20px); }
+@keyframes slideOut {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-80px); }
+}
+
+@keyframes slideInReverse {
+  from { opacity: 0; transform: translateX(-80px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.step-forward { animation: slideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.step-back { animation: slideInReverse 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* ─── STEP BACKGROUNDS ──────────────────────────────────── */
+
+.step-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  transition: opacity 0.8s ease;
+}
+
+.step-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.step-bg-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
 }
 
 /* ─── PROGRESS BAR ──────────────────────────────────────── */
@@ -350,63 +381,89 @@ a {
 /* ─── SEAT GRID ─────────────────────────────────────────── */
 
 .seat-grid-wrapper {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid var(--card-border);
-  border-radius: 24px 24px var(--radius) var(--radius);
-  padding: 2rem 1.5rem;
   position: relative;
+  border-radius: 20px;
   overflow: hidden;
+  padding: 0;
 }
 
-.seat-grid-wrapper::before {
-  content: '';
+.seat-grid-bg {
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 120px;
-  height: 6px;
-  background: var(--card-border);
-  border-radius: 0 0 6px 6px;
+  inset: 0;
+  z-index: 0;
 }
 
+.seat-grid-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.25) saturate(0.6) blur(2px);
+}
+
+.seat-grid-content {
+  position: relative;
+  z-index: 1;
+  padding: 2rem 1rem;
+}
+
+/* Individual seat — styled like a real blue bus seat */
 .seat {
-  width: 48px;
-  height: 48px;
-  border-radius: 10px;
-  border: 2px solid var(--card-border);
-  background: rgba(255,255,255,0.04);
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.8rem;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px 8px 4px 4px;
+  border: none;
+  background: linear-gradient(180deg, #3B82F6 0%, #1E40AF 60%, #1E3A5F 100%);
+  color: white;
+  font-weight: 700;
+  font-size: 0.75rem;
   cursor: pointer;
-  transition: var(--transition);
+  transition: all 0.25s ease;
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: 'Outfit', sans-serif;
+  position: relative;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2);
+}
+
+.seat::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 4px;
+  right: 4px;
+  height: 4px;
+  background: #0F172A;
+  border-radius: 0 0 4px 4px;
 }
 
 .seat:hover:not(.seat-booked) {
-  border-color: var(--gold);
-  background: rgba(245, 158, 11, 0.1);
-  color: var(--gold);
-  transform: scale(1.08);
+  transform: scale(1.1) translateY(-2px);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+  background: linear-gradient(180deg, #60A5FA 0%, #2563EB 60%, #1E40AF 100%);
 }
 
 .seat-selected {
-  border-color: var(--gold) !important;
-  background: rgba(245, 158, 11, 0.2) !important;
-  color: var(--gold) !important;
+  background: linear-gradient(180deg, #FBBF24 0%, #D97706 60%, #92400E 100%) !important;
+  color: #0F172A !important;
+  transform: scale(1.1) translateY(-2px);
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.6), inset 0 1px 0 rgba(255,255,255,0.3) !important;
   animation: pulse-glow 2s infinite;
-  transform: scale(1.05);
 }
 
 .seat-booked {
-  background: rgba(239, 68, 68, 0.15) !important;
-  border-color: rgba(239, 68, 68, 0.3) !important;
-  color: rgba(239, 68, 68, 0.5) !important;
+  background: linear-gradient(180deg, #6B7280 0%, #4B5563 60%, #374151 100%) !important;
+  color: rgba(255,255,255,0.3) !important;
   cursor: not-allowed;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+  opacity: 0.6;
+}
+
+.seat-booked::before {
+  content: '✕';
+  position: absolute;
+  font-size: 1.1rem;
+  color: rgba(239, 68, 68, 0.7);
 }
 
 /* ─── TICKET ────────────────────────────────────────────── */
