@@ -406,64 +406,94 @@ a {
   padding: 2rem 1rem;
 }
 
-/* Individual seat — styled like a real blue bus seat */
-.seat {
-  width: 52px;
-  height: 52px;
-  border-radius: 8px 8px 4px 4px;
+/* ─── SEAT IMAGE BUTTONS (bus diagram) ──────────────────── */
+
+.seat-img-btn {
+  background: none;
   border: none;
-  background: linear-gradient(180deg, #3B82F6 0%, #1E40AF 60%, #1E3A5F 100%);
-  color: white;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: all 0.2s ease;
+  position: relative;
+  outline: none;
+}
+
+.seat-img-btn img {
+  width: 44px;
+  height: 56px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  transition: all 0.2s ease;
+}
+
+.seat-label {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.6rem;
   font-weight: 700;
+  color: rgba(255,255,255,0.7);
+  letter-spacing: 0.5px;
+  line-height: 1;
+}
+
+.seat-img-btn:hover:not(.seat-img-booked) img {
+  transform: scale(1.15) translateY(-3px);
+  filter: drop-shadow(0 6px 12px rgba(59,130,246,0.5)) brightness(1.2);
+}
+
+.seat-img-btn:hover:not(.seat-img-booked) .seat-label {
+  color: #93C5FD;
+}
+
+.seat-img-selected img {
+  transform: scale(1.15) translateY(-3px);
+  filter: drop-shadow(0 6px 16px rgba(245,158,11,0.7)) brightness(1.1);
+  animation: seatPulse 2s ease-in-out infinite;
+}
+
+.seat-img-selected .seat-label {
+  color: var(--gold);
+  font-size: 0.65rem;
+}
+
+.seat-img-booked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.seat-img-booked img {
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3)) grayscale(0.4);
+}
+
+.seat-img-booked .seat-label {
+  color: #4B5563;
+}
+
+@keyframes seatPulse {
+  0%, 100% { filter: drop-shadow(0 6px 16px rgba(245,158,11,0.7)) brightness(1.1); }
+  50% { filter: drop-shadow(0 8px 24px rgba(245,158,11,1)) brightness(1.25); }
+}
+
+/* Keep old .seat class for any legacy uses */
+.seat {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  border: 2px solid var(--card-border);
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted);
+  font-weight: 600;
   font-size: 0.75rem;
   cursor: pointer;
-  transition: all 0.25s ease;
+  transition: var(--transition);
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: 'Outfit', sans-serif;
-  position: relative;
-  box-shadow: 0 3px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2);
-}
-
-.seat::after {
-  content: '';
-  position: absolute;
-  bottom: -4px;
-  left: 4px;
-  right: 4px;
-  height: 4px;
-  background: #0F172A;
-  border-radius: 0 0 4px 4px;
-}
-
-.seat:hover:not(.seat-booked) {
-  transform: scale(1.1) translateY(-2px);
-  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
-  background: linear-gradient(180deg, #60A5FA 0%, #2563EB 60%, #1E40AF 100%);
-}
-
-.seat-selected {
-  background: linear-gradient(180deg, #FBBF24 0%, #D97706 60%, #92400E 100%) !important;
-  color: #0F172A !important;
-  transform: scale(1.1) translateY(-2px);
-  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.6), inset 0 1px 0 rgba(255,255,255,0.3) !important;
-  animation: pulse-glow 2s infinite;
-}
-
-.seat-booked {
-  background: linear-gradient(180deg, #6B7280 0%, #4B5563 60%, #374151 100%) !important;
-  color: rgba(255,255,255,0.3) !important;
-  cursor: not-allowed;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
-  opacity: 0.6;
-}
-
-.seat-booked::before {
-  content: '✕';
-  position: absolute;
-  font-size: 1.1rem;
-  color: rgba(239, 68, 68, 0.7);
 }
 
 /* ─── TICKET ────────────────────────────────────────────── */

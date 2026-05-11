@@ -6,6 +6,13 @@ import { supabase } from '@/lib/supabase'
 
 type Step = 'results' | 'seats' | 'confirm'
 
+// Parse seat label like "1A","1B","1C","1D" -> row 1, col A/B/C/D
+function parseSeat(seatNumber: string) {
+    const match = seatNumber.match(/^(\d+)([A-Z]+)$/)
+    if (!match) return { row: 0, col: seatNumber }
+    return { row: parseInt(match[1]), col: match[2] }
+}
+
 export default function BookingFlow() {
     const searchParams = useSearchParams()
     const router = useRouter()
@@ -18,22 +25,18 @@ export default function BookingFlow() {
     const [direction, setDirection] = useState<'forward' | 'back'>('forward')
     const [animKey, setAnimKey] = useState(0)
 
-    // Step 1: Results
     const [schedules, setSchedules] = useState<any[]>([])
     const [loadingResults, setLoadingResults] = useState(true)
 
-    // Step 2: Seats
     const [selectedSchedule, setSelectedSchedule] = useState<any>(null)
     const [seats, setSeats] = useState<any[]>([])
-    const [selectedSeat, setSelectedSeat] = useState<string | null>(null)
+    const [selectedSeats, setSelectedSeats] = useState<string[]>([])
     const [loadingSeats, setLoadingSeats] = useState(false)
 
-    // Step 3: Confirm
     const [name, setName] = useState('')
     const [phone, setPhone] = useState('')
     const [paying, setPaying] = useState(false)
 
-    // ─── Slide transition ──────────────────────────────────────
     const goToStep = useCallback((newStep: Step, dir: 'forward' | 'back' = 'forward') => {
         setDirection(dir)
         setAnimKey(k => k + 1)
@@ -41,7 +44,6 @@ export default function BookingFlow() {
         window.scrollTo({ top: 0, behavior: 'smooth' })
     }, [])
 
-    // ─── Step 1: Load schedules ────────────────────────────────
     useEffect(() => {
         async function fetchSchedules() {
             if (!from || !to || !date) return
@@ -53,11 +55,10 @@ export default function BookingFlow() {
         fetchSchedules()
     }, [from, to, date])
 
-    // ─── Step 2: Load seats ────────────────────────────────────
     const handleSelectSchedule = async (schedule: any) => {
         setSelectedSchedule(schedule)
         setLoadingSeats(true)
-        setSelectedSeat(null)
+        setSelectedSeats([])
         goToStep('seats', 'forward')
 
         const { data: seatData } = await supabase
@@ -69,7 +70,6 @@ export default function BookingFlow() {
         setSeats(seatData || [])
         setLoadingSeats(false)
 
-        // Realtime
         const channel = supabase
             .channel('seats_' + schedule.id)
             .on('postgres_changes',
@@ -81,24 +81,26 @@ export default function BookingFlow() {
         return () => { supabase.removeChannel(channel) }
     }
 
-    // ─── Step 3: Pay ───────────────────────────────────────────
+    const toggleSeat = (seatNum: string) => {
+        setSelectedSeats(prev =>
+            prev.includes(seatNum)
+                ? prev.filter(s => s !== seatNum)
+                : prev.length >= 10 ? (alert('Maximum 10 seats per booking'), prev) : [...prev, seatNum]
+        )
+    }
+
     const handlePay = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (!/^09\d{8}$/.test(phone)) return alert('Phone must be: 09XXXXXXXX (10 digits)')
+        if (!/^09\d{8}$/.test(phone)) {
+            return alert('Phone must be: 09XXXXXXXX (10 digits)')
+        }
         setPaying(true)
-
         const res = await fetch('/api/bookings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                scheduleId: selectedSchedule.id,
-                seatNumber: selectedSeat,
-                name,
-                phone
-            }),
+            body: JSON.stringify({ scheduleId: selectedSchedule.id, seatNumbers: selectedSeats, name, phone }),
         })
         const data = await res.json()
-
         if (data.checkoutUrl) {
             window.location.href = data.checkoutUrl
         } else {
@@ -107,52 +109,49 @@ export default function BookingFlow() {
         }
     }
 
-    // ─── Progress ──────────────────────────────────────────────
     const stepList: { key: Step; label: string; num: number }[] = [
         { key: 'results', label: 'Select Bus', num: 1 },
-        { key: 'seats', label: 'Pick Seat', num: 2 },
+        { key: 'seats', label: 'Pick Seats', num: 2 },
         { key: 'confirm', label: 'Pay', num: 3 },
     ]
     const currentIdx = stepList.findIndex(s => s.key === step)
+    const pricePerSeat = selectedSchedule?.routes?.base_price_etb ?? 0
+    const totalPrice = pricePerSeat * selectedSeats.length
 
-    // ─── Seat layout: 2+2 with aisle (like the seat map image) ─
-    // Parse seats into rows of 4 (seats 1-4, 5-8, etc.)
-    const seatsByNumber = seats.sort((a, b) => {
-        const numA = parseInt(a.seat_number)
-        const numB = parseInt(b.seat_number)
-        return numA - numB
+    // Build rows: group seats by row number, left (A,B) and right (C,D)
+    const seatMap: Record<number, { left: any[], right: any[] }> = {}
+    seats.forEach(seat => {
+        const { row, col } = parseSeat(seat.seat_number)
+        if (!seatMap[row]) seatMap[row] = { left: [], right: [] }
+        if (col === 'A' || col === 'B') {
+            seatMap[row].left.push(seat)
+        } else {
+            seatMap[row].right.push(seat)
+        }
     })
+    const sortedRows = Object.keys(seatMap).map(Number).sort((a, b) => a - b)
+    const availableCount = seats.filter(s => !s.is_booked).length
 
-    const seatRows: any[][] = []
-    for (let i = 0; i < seatsByNumber.length; i += 4) {
-        seatRows.push(seatsByNumber.slice(i, i + 4))
-    }
-
-    const price = selectedSchedule?.routes?.base_price_etb ?? 0
-
-    // Background image for each step
-    const bgImage = step === 'results' ? '/bus-side.jpg' : step === 'seats' ? '/bus-interior.jpg' : '/bus-aerial.jpg'
+    const bgImage = step === 'results' ? '/bus-side.jpg' : step === 'seats' ? '/bus-aerial.jpg' : '/bus-aerial.jpg'
 
     return (
-        <div style={{ minHeight: '100vh', position: 'relative' }}>
-            {/* ─── Background Image (changes per step) ───── */}
+        <div style={{ minHeight: '100vh', position: 'relative', background: 'var(--navy)' }}>
+            {/* Background */}
             <div className="step-bg" key={'bg-' + step}>
                 <img src={bgImage} alt="" />
                 <div className="step-bg-overlay" />
             </div>
 
-            {/* ─── Header ───── */}
-            <div style={{ position: 'relative', zIndex: 10, padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            {/* Header */}
+            <div style={{ position: 'relative', zIndex: 10, padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', backdropFilter: 'blur(12px)' }}>
                 <div className="container-wide" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <button className="back-btn" onClick={() => {
                         if (step === 'confirm') goToStep('seats', 'back')
                         else if (step === 'seats') goToStep('results', 'back')
                         else router.push('/')
-                    }}>
-                        ← Back
-                    </button>
+                    }}>← Back</button>
                     <div style={{ textAlign: 'right' }}>
-                        <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text)' }}>
+                        <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text)' }}>
                             {from} → {to}
                         </p>
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{date}</p>
@@ -160,48 +159,42 @@ export default function BookingFlow() {
                 </div>
             </div>
 
-            {/* ─── Progress Bar ───── */}
-            <div className="container-wide" style={{ position: 'relative', zIndex: 10 }}>
-                <div className="progress-bar">
-                    {stepList.map((s, i) => (
-                        <div key={s.key} style={{ display: 'contents' }}>
-                            <div className={`progress-step ${i < currentIdx ? 'done' : i === currentIdx ? 'active' : ''}`}>
-                                <div className="step-num">
-                                    {i < currentIdx ? '✓' : s.num}
+            {/* Progress */}
+            <div style={{ position: 'relative', zIndex: 10 }}>
+                <div className="container-wide">
+                    <div className="progress-bar">
+                        {stepList.map((s, i) => (
+                            <div key={s.key} style={{ display: 'contents' }}>
+                                <div className={`progress-step ${i < currentIdx ? 'done' : i === currentIdx ? 'active' : ''}`}>
+                                    <div className="step-num">{i < currentIdx ? '✓' : s.num}</div>
+                                    <span>{s.label}</span>
                                 </div>
-                                <span>{s.label}</span>
+                                {i < stepList.length - 1 && <div className={`progress-line ${i < currentIdx ? 'filled' : ''}`} />}
                             </div>
-                            {i < stepList.length - 1 && (
-                                <div className={`progress-line ${i < currentIdx ? 'filled' : ''}`} />
-                            )}
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
             </div>
 
-            {/* ─── Step Content (slides left/right) ───── */}
+            {/* Step Content */}
             <div className="container-wide" style={{ position: 'relative', zIndex: 10, paddingBottom: '4rem' }}>
                 <div key={animKey} className={direction === 'forward' ? 'step-forward' : 'step-back'}>
 
-                    {/* ═══════════ STEP 1: AVAILABLE BUSES ═══════════ */}
+                    {/* ═══ STEP 1: SELECT BUS ═══ */}
                     {step === 'results' && (
                         <div>
-                            <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>
-                                Available Buses
-                            </h2>
-                            <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                                {schedules.length > 0 ? `${schedules.length} bus${schedules.length > 1 ? 'es' : ''} found for this route` : ''}
+                            <h2 style={{ fontSize: '1.6rem', marginBottom: '0.25rem' }}>Available Buses</h2>
+                            <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+                                {!loadingResults && `${schedules.length} bus${schedules.length !== 1 ? 'es' : ''} found · ${from} → ${to}`}
                             </p>
 
                             {loadingResults ? (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                    {[1, 2, 3].map(i => (
-                                        <div key={i} className="skeleton" style={{ height: '100px' }} />
-                                    ))}
+                                    {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: '88px' }} />)}
                                 </div>
                             ) : schedules.length === 0 ? (
                                 <div className="glass" style={{ padding: '3rem', textAlign: 'center' }}>
-                                    <p style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🚌</p>
+                                    <p style={{ fontSize: '3rem', marginBottom: '1rem' }}>🚌</p>
                                     <h3 style={{ marginBottom: '0.5rem' }}>No buses found</h3>
                                     <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>Try a different date or route.</p>
                                     <button className="btn btn-outline" onClick={() => router.push('/')}>← Search Again</button>
@@ -214,32 +207,41 @@ export default function BookingFlow() {
                                             className="glass glass-hover"
                                             onClick={() => handleSelectSchedule(schedule)}
                                             style={{
-                                                padding: '1.25rem', cursor: 'pointer',
-                                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                animation: `fadeInUp 0.5s ${i * 0.1}s both`
+                                                padding: '1.25rem 1.5rem',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                gap: '1rem',
+                                                animation: `fadeInUp 0.4s ${i * 0.08}s both`,
+                                                borderLeft: '3px solid var(--emerald)',
                                             }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                                <img src="/bus-side.jpg" alt="bus" style={{
-                                                    width: '70px', height: '45px', borderRadius: '8px', objectFit: 'cover',
-                                                    border: '1px solid var(--card-border)'
-                                                }} />
+                                                {/* Bus icon */}
+                                                <div style={{
+                                                    width: 48, height: 48, borderRadius: 10,
+                                                    background: 'linear-gradient(135deg, #16a34a, #065f46)',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    fontSize: '1.4rem', flexShrink: 0
+                                                }}>🚌</div>
                                                 <div>
-                                                    <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '1.1rem' }}>
-                                                        🕐 {schedule.departure_time}
-                                                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.85rem' }}> → {schedule.arrival_time || 'TBD'}</span>
+                                                    <p style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: '1.1rem' }}>
+                                                        {schedule.departure_time}
+                                                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.85rem' }}>
+                                                            {' '}→ {schedule.arrival_time || 'TBD'}
+                                                        </span>
                                                     </p>
-                                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '4px' }}>
-                                                        🚌 {schedule.buses.plate_number} &nbsp;•&nbsp; {schedule.routes.distance_km} km
+                                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 3 }}>
+                                                        {schedule.buses?.plate_number} · {schedule.routes?.distance_km} km
                                                     </p>
                                                 </div>
                                             </div>
-                                            <div style={{ textAlign: 'right' }}>
-                                                <p style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: '1.4rem', color: 'var(--gold)' }}>
-                                                    {schedule.routes.base_price_etb}
-                                                    <span style={{ fontSize: '0.8rem', fontWeight: 400, color: 'var(--text-muted)' }}> ETB</span>
+                                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                                <p style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.5rem', color: 'var(--gold)', lineHeight: 1 }}>
+                                                    {schedule.routes?.base_price_etb}
                                                 </p>
-                                                <p style={{ fontSize: '0.75rem', color: 'var(--emerald)', fontWeight: 600 }}>Select →</p>
+                                                <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>ETB · Select →</p>
                                             </div>
                                         </div>
                                     ))}
@@ -248,214 +250,265 @@ export default function BookingFlow() {
                         </div>
                     )}
 
-                    {/* ═══════════ STEP 2: SEAT PICKER ═══════════ */}
+                    {/* ═══ STEP 2: PICK SEAT ═══ */}
                     {step === 'seats' && (
                         <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
+                            {/* Header row */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
                                 <div>
-                                    <h2 style={{ fontSize: '1.5rem' }}>Pick Your Seat</h2>
-                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>
-                                        🕐 {selectedSchedule?.departure_time} &nbsp;•&nbsp; 🚌 {selectedSchedule?.buses?.plate_number}
+                                    <h2 style={{ fontSize: '1.4rem' }}>Choose Your Seats</h2>
+                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: 3 }}>
+                                        🕐 {selectedSchedule?.departure_time} · {selectedSchedule?.buses?.plate_number}
                                     </p>
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
-                                    <p style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: '1.3rem', color: 'var(--gold)' }}>
-                                        {price} ETB
-                                    </p>
+                                    <p style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.4rem', color: 'var(--gold)', lineHeight: 1 }}>{pricePerSeat}</p>
+                                    <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>ETB per seat</p>
                                 </div>
                             </div>
 
+                            {/* Legend */}
+                            <div style={{ display: 'flex', gap: '1.25rem', marginBottom: '1rem', fontSize: '0.75rem' }}>
+                                {[
+                                    { img: '/seat-blue.png', label: `Available (${availableCount})` },
+                                    { img: '/seat-gold.png', label: 'Selected' },
+                                    { img: '/seat-grey.png', label: 'Booked' },
+                                ].map(item => (
+                                    <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <img src={item.img} alt="" style={{ width: 18, height: 22, objectFit: 'contain' }} />
+                                        <span style={{ color: 'var(--text-muted)' }}>{item.label}</span>
+                                    </div>
+                                ))}
+                            </div>
+
                             {loadingSeats ? (
-                                <div className="skeleton" style={{ height: '500px', borderRadius: '20px' }} />
+                                <div className="skeleton" style={{ height: 560, borderRadius: 24 }} />
                             ) : (
                                 <>
-                                    {/* Seat Legend */}
-                                    <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1.5rem', fontSize: '0.8rem' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <div style={{ width: '20px', height: '20px', borderRadius: '4px', background: 'linear-gradient(180deg, #3B82F6, #1E40AF)', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }} />
-                                            <span style={{ color: 'var(--text-muted)' }}>Available</span>
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <div style={{ width: '20px', height: '20px', borderRadius: '4px', background: 'linear-gradient(180deg, #FBBF24, #D97706)', boxShadow: '0 2px 4px rgba(245,158,11,0.4)' }} />
-                                            <span style={{ color: 'var(--text-muted)' }}>Selected</span>
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <div style={{ width: '20px', height: '20px', borderRadius: '4px', background: 'linear-gradient(180deg, #6B7280, #374151)', opacity: 0.6 }} />
-                                            <span style={{ color: 'var(--text-muted)' }}>Booked</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Bus Interior Seat Grid */}
-                                    <div className="seat-grid-wrapper">
-                                        {/* Bus interior as background */}
-                                        <div className="seat-grid-bg">
-                                            <img src="/bus-interior.jpg" alt="Bus interior" />
-                                        </div>
-
-                                        <div className="seat-grid-content">
-                                            {/* Driver / Front label */}
-                                            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                                                <div style={{
-                                                    display: 'inline-flex', alignItems: 'center', gap: '8px',
-                                                    padding: '6px 16px', borderRadius: '20px',
-                                                    background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)',
-                                                    border: '1px solid rgba(255,255,255,0.15)'
-                                                }}>
-                                                    <span style={{ fontSize: '1rem' }}>🪟</span>
-                                                    <span style={{ fontSize: '0.75rem', color: 'var(--text)', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600 }}>
-                                                        FRONT · DRIVER
-                                                    </span>
-                                                </div>
-                                            </div>
-
-                                            {/* Seat Rows: 2 left | aisle | 2 right */}
-                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                                                {seatRows.map((row, rowIdx) => (
-                                                    <div key={rowIdx} style={{
-                                                        display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center',
-                                                        animation: `fadeInUp 0.3s ${rowIdx * 0.04}s both`
-                                                    }}>
-                                                        {/* Left pair */}
-                                                        {row.slice(0, 2).map((seat: any) => {
-                                                            const isSelected = selectedSeat === seat.seat_number
-                                                            const isBooked = seat.is_booked
-                                                            return (
-                                                                <button
-                                                                    key={seat.id}
-                                                                    disabled={isBooked}
-                                                                    onClick={() => setSelectedSeat(seat.seat_number)}
-                                                                    className={`seat ${isSelected ? 'seat-selected' : ''} ${isBooked ? 'seat-booked' : ''}`}
-                                                                >
-                                                                    {!isBooked && seat.seat_number}
-                                                                </button>
-                                                            )
-                                                        })}
-
-                                                        {/* Aisle */}
-                                                        <div style={{ width: '36px', display: 'flex', justifyContent: 'center' }}>
-                                                            {rowIdx === 0 && (
-                                                                <span style={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.25)', writingMode: 'vertical-lr', letterSpacing: '2px' }}>
-                                                                    AISLE
-                                                                </span>
-                                                            )}
-                                                        </div>
-
-                                                        {/* Right pair */}
-                                                        {row.slice(2, 4).map((seat: any) => {
-                                                            const isSelected = selectedSeat === seat.seat_number
-                                                            const isBooked = seat.is_booked
-                                                            return (
-                                                                <button
-                                                                    key={seat.id}
-                                                                    disabled={isBooked}
-                                                                    onClick={() => setSelectedSeat(seat.seat_number)}
-                                                                    className={`seat ${isSelected ? 'seat-selected' : ''} ${isBooked ? 'seat-booked' : ''}`}
-                                                                >
-                                                                    {!isBooked && seat.seat_number}
-                                                                </button>
-                                                            )
-                                                        })}
-                                                    </div>
-                                                ))}
-                                            </div>
-
-                                            {/* Rear label */}
-                                            <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
-                                                <div style={{
-                                                    display: 'inline-flex', alignItems: 'center', gap: '8px',
-                                                    padding: '6px 16px', borderRadius: '20px',
-                                                    background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)',
-                                                    border: '1px solid rgba(255,255,255,0.15)'
-                                                }}>
-                                                    <span style={{ fontSize: '0.75rem', color: 'var(--danger)', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: 600 }}>
-                                                        🚨 EMERGENCY EXIT · REAR
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Continue */}
+                                    {/* BUS DIAGRAM */}
                                     <div style={{
-                                        marginTop: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                        padding: '1rem 1.25rem', borderRadius: 'var(--radius-sm)',
-                                        background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(10px)',
-                                        border: '1px solid var(--card-border)'
+                                        // Outer bus body - green exterior
+                                        background: 'linear-gradient(180deg, #16a34a 0%, #15803d 50%, #166534 100%)',
+                                        borderRadius: '32px 32px 20px 20px',
+                                        padding: '6px',
+                                        boxShadow: '0 20px 60px rgba(0,0,0,0.5), 0 0 0 2px #14532d',
+                                        maxWidth: 460,
+                                        margin: '0 auto',
                                     }}>
-                                        <p style={{ fontFamily: 'Outfit', fontWeight: 600 }}>
-                                            {selectedSeat ? (
-                                                <span>Seat <span style={{ color: 'var(--gold)', fontSize: '1.2rem' }}>{selectedSeat}</span></span>
+                                        {/* Inner bus body */}
+                                        <div style={{
+                                            background: '#1a1a1a',
+                                            borderRadius: '28px 28px 16px 16px',
+                                            overflow: 'hidden',
+                                        }}>
+                                            {/* Front cab */}
+                                            <div style={{
+                                                background: 'linear-gradient(180deg, #111 0%, #222 100%)',
+                                                padding: '12px 20px',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                borderBottom: '2px solid #333',
+                                            }}>
+                                                <div style={{ fontSize: '0.65rem', color: '#666', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>
+                                                    Driver's Cabin
+                                                </div>
+                                                <div style={{
+                                                    background: '#222', border: '1px solid #444', borderRadius: 6,
+                                                    padding: '3px 10px', fontSize: '0.65rem', color: '#888', fontWeight: 700
+                                                }}>📺 TV</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#16a34a', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                                    FRONT DOOR →
+                                                </div>
+                                            </div>
+
+                                            {/* Seating area */}
+                                            <div style={{
+                                                // Wood floor
+                                                background: 'linear-gradient(180deg, #3d2b1f 0%, #5c3d28 40%, #3d2b1f 100%)',
+                                                padding: '16px 12px',
+                                                position: 'relative',
+                                            }}>
+                                                {/* Aisle label */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: '50%',
+                                                    top: '50%',
+                                                    transform: 'translate(-50%, -50%)',
+                                                    fontSize: '0.6rem',
+                                                    color: 'rgba(255,255,255,0.2)',
+                                                    letterSpacing: 3,
+                                                    writingMode: 'vertical-lr',
+                                                    textTransform: 'uppercase',
+                                                    fontWeight: 600,
+                                                    pointerEvents: 'none',
+                                                    userSelect: 'none',
+                                                }}>AISLE</div>
+
+                                                {/* Seat rows */}
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                    {sortedRows.map((rowNum, rowIdx) => {
+                                                        const row = seatMap[rowNum]
+                                                        return (
+                                                            <div key={rowNum} style={{
+                                                                display: 'flex',
+                                                                justifyContent: 'center',
+                                                                alignItems: 'center',
+                                                                gap: 6,
+                                                                animation: `fadeInUp 0.3s ${rowIdx * 0.03}s both`
+                                                            }}>
+                                                                {/* Left seats (A, B) */}
+                                                                <div style={{ display: 'flex', gap: 4 }}>
+                                                                    {row.left.sort((a, b) => parseSeat(a.seat_number).col.localeCompare(parseSeat(b.seat_number).col)).map((seat: any) => {
+                                                                        const isSelected = selectedSeats.includes(seat.seat_number)
+                                                                        const isBooked = seat.is_booked
+                                                                        return (
+                                                                            <button
+                                                                                key={seat.id}
+                                                                                disabled={isBooked}
+                                                                                onClick={() => toggleSeat(seat.seat_number)}
+                                                                                title={seat.seat_number}
+                                                                                className={`seat-img-btn ${isSelected ? 'seat-img-selected' : ''} ${isBooked ? 'seat-img-booked' : ''}`}
+                                                                            >
+                                                                                <img
+                                                                                    src={isBooked ? '/seat-grey.png' : isSelected ? '/seat-gold.png' : '/seat-blue.png'}
+                                                                                    alt={seat.seat_number}
+                                                                                />
+                                                                                <span className="seat-label">{seat.seat_number}</span>
+                                                                            </button>
+                                                                        )
+                                                                    })}
+                                                                </div>
+
+                                                                {/* Aisle gap */}
+                                                                <div style={{ width: 32, flexShrink: 0 }} />
+
+                                                                {/* Right seats (C, D) */}
+                                                                <div style={{ display: 'flex', gap: 4 }}>
+                                                                    {row.right.sort((a, b) => parseSeat(a.seat_number).col.localeCompare(parseSeat(b.seat_number).col)).map((seat: any) => {
+                                                                        const isSelected = selectedSeats.includes(seat.seat_number)
+                                                                        const isBooked = seat.is_booked
+                                                                        return (
+                                                                            <button
+                                                                                key={seat.id}
+                                                                                disabled={isBooked}
+                                                                                onClick={() => toggleSeat(seat.seat_number)}
+                                                                                title={seat.seat_number}
+                                                                                className={`seat-img-btn ${isSelected ? 'seat-img-selected' : ''} ${isBooked ? 'seat-img-booked' : ''}`}
+                                                                            >
+                                                                                <img
+                                                                                    src={isBooked ? '/seat-grey.png' : isSelected ? '/seat-gold.png' : '/seat-blue.png'}
+                                                                                    alt={seat.seat_number}
+                                                                                />
+                                                                                <span className="seat-label">{seat.seat_number}</span>
+                                                                            </button>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            {/* Rear */}
+                                            <div style={{
+                                                background: '#111',
+                                                padding: '10px 20px',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                borderTop: '2px solid #333',
+                                            }}>
+                                                <div style={{ fontSize: '0.6rem', color: '#444', textTransform: 'uppercase', letterSpacing: 1 }}>Rear</div>
+                                                <div style={{ fontSize: '0.6rem', color: '#dc2626', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                                    🚨 EMERGENCY EXIT
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Continue bar */}
+                                    <div style={{
+                                        marginTop: '1.25rem',
+                                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                        padding: '1rem 1.25rem', borderRadius: 'var(--radius-sm)',
+                                        background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(12px)',
+                                        border: '1px solid var(--card-border)',
+                                        maxWidth: 460, margin: '1.25rem auto 0',
+                                    }}>
+                                        <div>
+                                            {selectedSeats.length > 0 ? (
+                                                <span style={{ fontFamily: 'Outfit', fontWeight: 600 }}>
+                                                    <span style={{ color: 'var(--gold)', fontSize: '1.1rem' }}>{selectedSeats.length}</span>
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                                        {' '}seat{selectedSeats.length > 1 ? 's' : ''} · {selectedSeats.join(', ')} · <strong style={{ color: 'var(--gold)' }}>{totalPrice} ETB</strong>
+                                                    </span>
+                                                </span>
                                             ) : (
-                                                <span style={{ color: 'var(--text-muted)' }}>Tap a seat to select</span>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Tap seats to select (up to 10)</span>
                                             )}
-                                        </p>
+                                        </div>
                                         <button
-                                            disabled={!selectedSeat}
+                                            disabled={selectedSeats.length === 0}
                                             onClick={() => goToStep('confirm', 'forward')}
                                             className="btn btn-gold"
-                                        >
-                                            Continue →
-                                        </button>
+                                        >Continue →</button>
                                     </div>
                                 </>
                             )}
                         </div>
                     )}
 
-                    {/* ═══════════ STEP 3: CONFIRM & PAY ═══════════ */}
+                    {/* ═══ STEP 3: CONFIRM & PAY ═══ */}
                     {step === 'confirm' && (
-                        <div>
-                            <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem' }}>
-                                Confirm & Pay
-                            </h2>
+                        <div style={{ maxWidth: 480, margin: '0 auto' }}>
+                            <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem' }}>Confirm & Pay</h2>
 
-                            {/* Trip Summary Card */}
-                            <div className="glass" style={{ padding: '1.25rem', marginBottom: '1.5rem' }}>
+                            {/* Trip card */}
+                            <div className="glass" style={{ padding: '1.25rem', marginBottom: '1.25rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                        <img src="/bus-side.jpg" alt="" style={{
-                                            width: '60px', height: '40px', borderRadius: '8px', objectFit: 'cover',
-                                            border: '1px solid var(--card-border)'
-                                        }} />
-                                        <div>
-                                            <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '1.05rem' }}>
-                                                {from} → {to}
-                                            </p>
-                                            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '4px' }}>
-                                                {date} &nbsp;•&nbsp; {selectedSchedule?.departure_time} &nbsp;•&nbsp; Seat <span style={{ color: 'var(--gold)' }}>{selectedSeat}</span>
-                                            </p>
-                                        </div>
+                                    <div>
+                                        <p style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: '1.1rem' }}>
+                                            {from} → {to}
+                                        </p>
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: 4 }}>
+                                            {date} · {selectedSchedule?.departure_time} · {selectedSeats.length} seat{selectedSeats.length > 1 ? 's' : ''}
+                                        </p>
+                                        <p style={{ color: 'var(--gold)', fontSize: '0.85rem', fontWeight: 600, marginTop: 2 }}>
+                                            {selectedSeats.join(', ')}
+                                        </p>
                                     </div>
-                                    <p style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: '1.4rem', color: 'var(--gold)' }}>
-                                        {price} <span style={{ fontSize: '0.8rem', fontWeight: 400, color: 'var(--text-muted)' }}>ETB</span>
-                                    </p>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <p style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.5rem', color: 'var(--gold)', lineHeight: 1 }}>{totalPrice}</p>
+                                        <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{selectedSeats.length > 1 ? `${selectedSeats.length} × ${pricePerSeat}` : ''} ETB</p>
+                                    </div>
                                 </div>
                             </div>
 
-                            {/* Form */}
                             <form onSubmit={handlePay} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                 <div>
-                                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+                                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 6, display: 'block', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>
                                         Full Name
                                     </label>
                                     <input className="input" placeholder="e.g. Abebe Kebede" value={name} onChange={e => setName(e.target.value)} required />
                                 </div>
 
                                 <div>
-                                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', display: 'block', fontWeight: 500 }}>
+                                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 6, display: 'block', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>
                                         Phone Number
                                     </label>
                                     <input className="input" placeholder="09XXXXXXXX" value={phone} onChange={e => setPhone(e.target.value)} required />
                                 </div>
 
                                 <div style={{
-                                    display: 'flex', alignItems: 'center', gap: '8px',
-                                    padding: '12px 16px', borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)'
+                                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                                    padding: '12px 14px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)'
                                 }}>
-                                    <span>⚠️</span>
-                                    <p style={{ color: 'var(--gold)', fontSize: '0.8rem' }}>
-                                        Complete payment promptly. Unpaid seats may be released.
+                                    <span style={{ fontSize: '1rem', marginTop: 1 }}>⚠️</span>
+                                    <p style={{ color: 'var(--gold)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                                        Complete your payment promptly. Unpaid seats are automatically released after 15 minutes.
                                     </p>
                                 </div>
 
@@ -463,14 +516,13 @@ export default function BookingFlow() {
                                     type="submit"
                                     disabled={paying}
                                     className="btn btn-emerald btn-full"
-                                    style={{ marginTop: '0.5rem', fontSize: '1.05rem' }}
+                                    style={{ marginTop: '0.25rem', fontSize: '1rem', padding: '0.9rem' }}
                                 >
-                                    {paying ? 'Redirecting to Chapa...' : `💳 Pay ${price} ETB`}
+                                    {paying ? '⏳ Redirecting to Chapa...' : `💳 Pay ${totalPrice} ETB`}
                                 </button>
                             </form>
                         </div>
                     )}
-
                 </div>
             </div>
         </div>

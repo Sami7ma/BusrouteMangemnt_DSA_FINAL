@@ -39,5 +39,9 @@ export async function GET(req: NextRequest) {
             { status: 500 }
         )
     }
-    return NextResponse.json(data)
+    // PostgREST nested .eq on joined tables returns rows where join is null — filter them out
+    const filtered = (data || []).filter((s: any) =>
+        s.routes?.origin?.name && s.routes?.destination?.name
+    )
+    return NextResponse.json(filtered)
 }

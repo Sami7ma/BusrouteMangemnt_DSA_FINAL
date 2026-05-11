@@ -2,50 +2,69 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export async function POST(req: NextRequest) {
-    const { bookingRef } = await req.json()
+    const { bookingRef, phone } = await req.json()
 
-    if (!bookingRef) {
-        return NextResponse.json({ error: 'Booking ref is required' }, { status: 400 })
+    // Require both booking ref AND phone for ownership verification
+    if (!bookingRef || !phone) {
+        return NextResponse.json({ error: 'Booking ref and phone number are required' }, { status: 400 })
     }
 
-    // 1. Find the booking + its seat + the schedule departure
-    const { data: booking, error } = await supabaseAdmin
+    // 1. Find all bookings in this group (supports both single and group bookings)
+    const { data: bookings, error } = await supabaseAdmin
         .from('bookings')
-        .select(`
-            *,
-            seats ( id, schedule_id, seat_number ),
-            passengers ( phone )
-        `)
-        .eq('booking_ref', bookingRef)
-        .single()
+        .select(`*, passengers ( phone )`)
+        .or(`booking_ref.eq.${bookingRef},group_ref.eq.${bookingRef}`)
 
-    if (error || !booking) {
+    if (error || !bookings || bookings.length === 0) {
         return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
     }
 
-    if (booking.status === 'CANCELLED') {
-        return NextResponse.json({ error: 'Already cancelled' }, { status: 400 })
+    // 2. Verify ownership — phone must match the passenger who booked
+    const passengerPhone = (bookings[0].passengers as any)?.phone
+    if (passengerPhone !== phone) {
+        return NextResponse.json({ error: 'Unauthorized — phone does not match booking owner' }, { status: 403 })
     }
 
-    // 2. Get the departure date/time from the schedule
-    const { data: schedule } = await supabaseAdmin
-        .from('schedules')
-        .select('departure_date, departure_time')
-        .eq('id', booking.seats.schedule_id)
-        .single()
+    // Check none are already cancelled
+    const alreadyCancelled = bookings.filter(b => b.status === 'CANCELLED')
+    const toCancel = bookings.filter(b => b.status !== 'CANCELLED')
+    if (toCancel.length === 0) {
+        return NextResponse.json({ error: 'All bookings already cancelled' }, { status: 400 })
+    }
 
-    // 3. Calculate hours until departure
-    const departureStr = `${schedule?.departure_date}T${schedule?.departure_time}`
-    const departureTime = new Date(departureStr).getTime()
-    const now = Date.now()
-    const hoursUntil = (departureTime - now) / (1000 * 60 * 60)
+    // 3. Get the seat IDs to release
+    const seatIds = toCancel.map(b => b.seat_id).filter(Boolean)
 
-    // 4. Block cancellation if the trip has already departed
-    if (hoursUntil < 0) {
+    // 4. Get departure info from the first seat
+    let hoursUntil = 999
+    if (seatIds.length > 0) {
+        const { data: seat } = await supabaseAdmin
+            .from('seats')
+            .select('schedule_id')
+            .eq('id', seatIds[0])
+            .single()
+
+        if (seat) {
+            const { data: schedule } = await supabaseAdmin
+                .from('schedules')
+                .select('departure_date, departure_time')
+                .eq('id', seat.schedule_id)
+                .single()
+
+            if (schedule) {
+                const departureStr = `${schedule.departure_date}T${schedule.departure_time}`
+                const departureTime = new Date(departureStr).getTime()
+                hoursUntil = (departureTime - Date.now()) / (1000 * 60 * 60)
+            }
+        }
+    }
+
+    // 5. Block cancellation if trip already departed
+    if (hoursUntil < -1) {
         return NextResponse.json({ error: 'Trip has already departed — cannot cancel' }, { status: 400 })
     }
 
-    // 5. Determine refund percentage based on our policy
+    // 6. Determine refund percentage
     let refundPercent = 0
     let refundMessage = ''
 
@@ -54,31 +73,33 @@ export async function POST(req: NextRequest) {
         refundMessage = 'Full refund (90%) — more than 24 hours before departure'
     } else if (hoursUntil > 6) {
         refundPercent = 50
-        refundMessage = 'Partial refund (50%) — 6-24 hours before departure'
+        refundMessage = 'Partial refund (50%) — 6–24 hours before departure'
     } else {
         refundPercent = 0
         refundMessage = 'No refund — less than 6 hours before departure'
     }
 
-    const refundAmount = Math.round(booking.price_etb * (refundPercent / 100))
+    const totalPrice = toCancel.reduce((sum, b) => sum + Number(b.price_etb || 0), 0)
+    const refundAmount = Math.round(totalPrice * (refundPercent / 100))
 
-    // 5. Update booking to CANCELLED
+    // 7. Mark all bookings CANCELLED
+    const bookingIds = toCancel.map(b => b.id)
     await supabaseAdmin
         .from('bookings')
-        .update({
-            status: 'CANCELLED',
-            cancelled_at: new Date().toISOString(),
-        })
-        .eq('id', booking.id)
+        .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
+        .in('id', bookingIds)
 
-    // 6. Release the seat so someone else can book it
-    await supabaseAdmin
-        .from('seats')
-        .update({ is_booked: false })
-        .eq('id', booking.seats.id)
+    // 8. Release all seats
+    if (seatIds.length > 0) {
+        await supabaseAdmin
+            .from('seats')
+            .update({ is_booked: false })
+            .in('id', seatIds)
+    }
 
     return NextResponse.json({
         success: true,
+        cancelledCount: toCancel.length,
         refundPercent,
         refundAmount,
         refundMessage,

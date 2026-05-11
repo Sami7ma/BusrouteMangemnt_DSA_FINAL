@@ -1,25 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { randomBytes } from 'crypto'
 
-// Helper to generate a short unique booking ref like "BMG-A3F29K"
+// Cryptographically strong booking ref — 10 hex chars = ~1 trillion combos
 function generateRef(): string {
-    return 'BMG-' + Math.random().toString(36).substring(2, 8).toUpperCase()
+    return 'BMG-' + randomBytes(5).toString('hex').toUpperCase()
 }
 
 export async function POST(req: NextRequest) {
-    const { scheduleId, seatNumber, name, phone } = await req.json()
+    const { scheduleId, seatNumbers, name, phone } = await req.json()
 
-    // Input validation
-    if (!scheduleId || !seatNumber || !name?.trim() || !phone?.trim()) {
+    // ── Input validation ──────────────────────────────────────────────
+    // Accept both single seat (legacy) and array of seats
+    const seats: string[] = Array.isArray(seatNumbers)
+        ? seatNumbers
+        : seatNumbers ? [seatNumbers] : ([] as string[])
+
+    if (!scheduleId || seats.length === 0 || !name?.trim() || !phone?.trim()) {
         return NextResponse.json({ error: 'All fields are required' }, { status: 400 })
+    }
+    if (seats.length > 10) {
+        return NextResponse.json({ error: 'Maximum 10 seats per booking' }, { status: 400 })
     }
     if (!/^09\d{8}$/.test(phone)) {
         return NextResponse.json({ error: 'Phone must be Ethiopian format: 09XXXXXXXX (10 digits)' }, { status: 400 })
     }
+    // Sanitize name
+    const cleanName = name.trim().replace(/[\x00-\x1F\x7F]/g, '').substring(0, 100)
+    if (cleanName.length < 2) {
+        return NextResponse.json({ error: 'Name must be at least 2 characters' }, { status: 400 })
+    }
 
-    // ── STEP 1: Find or create the passenger ──────────────────────────────
-    // We check if this phone number already exists. If so, we reuse that record.
-    // If not, we create a new one. This is "upsert" logic.
+    // ── Validate schedule exists and is in the future ──────────────────
+    const { data: schedule, error: schedError } = await supabaseAdmin
+        .from('schedules')
+        .select('id, departure_date, departure_time, status, routes(base_price_etb)')
+        .eq('id', scheduleId)
+        .single()
+
+    if (schedError || !schedule) {
+        return NextResponse.json({ error: 'Schedule not found' }, { status: 404 })
+    }
+    if (schedule.status !== 'SCHEDULED') {
+        return NextResponse.json({ error: 'This schedule is no longer active' }, { status: 400 })
+    }
+
+    // Block booking for past dates
+    const depDate = new Date(`${schedule.departure_date}T${schedule.departure_time || '23:59:59'}`)
+    if (depDate < new Date()) {
+        return NextResponse.json({ error: 'Cannot book a seat for a past departure' }, { status: 400 })
+    }
+
+    const pricePerSeat = (schedule.routes as any)?.base_price_etb ?? 0
+    const totalPrice = pricePerSeat * seats.length
+
+    // ── Find or create passenger ──────────────────────────────────────
     let passenger
     const { data: existing } = await supabaseAdmin
         .from('passengers')
@@ -30,66 +65,79 @@ export async function POST(req: NextRequest) {
     if (existing) {
         passenger = existing
     } else {
-        const { data: newPassenger, error: pError } = await supabaseAdmin
+        const { data: newP, error: pErr } = await supabaseAdmin
             .from('passengers')
-            .insert({ full_name: name, phone })
+            .insert({ full_name: cleanName, phone })
             .select('id')
             .single()
-
-        if (pError) return NextResponse.json({ error: 'Could not create passenger' }, { status: 500 })
-        passenger = newPassenger
+        if (pErr) return NextResponse.json({ error: 'Could not create passenger' }, { status: 500 })
+        passenger = newP
     }
 
-    // ── STEP 2: Find the seat and mark it as reserved ──────────────────────
-    const { data: seat, error: seatError } = await supabaseAdmin
-        .from('seats')
-        .select('id')
-        .eq('schedule_id', scheduleId)
-        .eq('seat_number', seatNumber)
-        .eq('is_booked', false) // Only proceed if seat is still free!
-        .single()
+    // ── Lock all seats atomically ─────────────────────────────────────
+    const lockedSeatIds: string[] = []
+    const failedSeats: string[] = []
 
-    if (seatError || !seat) {
-        return NextResponse.json({ error: 'Seat is no longer available' }, { status: 409 })
+    for (const seatNum of seats) {
+        const { data: seat, error: sErr } = await supabaseAdmin
+            .from('seats')
+            .select('id')
+            .eq('schedule_id', scheduleId)
+            .eq('seat_number', seatNum)
+            .eq('is_booked', false)
+            .single()
+
+        if (sErr || !seat) {
+            failedSeats.push(seatNum)
+            continue
+        }
+
+        await supabaseAdmin
+            .from('seats')
+            .update({ is_booked: true })
+            .eq('id', seat.id)
+
+        lockedSeatIds.push(seat.id)
     }
 
-    // Temporarily lock the seat so no one else can grab it during payment
-    await supabaseAdmin
-        .from('seats')
-        .update({ is_booked: true })
-        .eq('id', seat.id)
+    // If ANY seats failed, unlock all we locked and report
+    if (failedSeats.length > 0) {
+        for (const seatId of lockedSeatIds) {
+            await supabaseAdmin.from('seats').update({ is_booked: false }).eq('id', seatId)
+        }
+        return NextResponse.json({
+            error: `Seat(s) ${failedSeats.join(', ')} are no longer available`,
+        }, { status: 409 })
+    }
 
-    // ── STEP 3: Get the price from the route ──────────────────────────────
-    const { data: schedule } = await supabaseAdmin
-        .from('schedules')
-        .select('routes(base_price_etb)')
-        .eq('id', scheduleId)
-        .single()
+    // ── Create booking records ────────────────────────────────────────
+    // One booking ref for the whole group, one row per seat
+    const groupRef = generateRef()
+    const bookingInserts = lockedSeatIds.map((seatId, i) => ({
+        booking_ref: seats.length === 1 ? groupRef : `${groupRef}-${i + 1}`,
+        passenger_id: passenger.id,
+        seat_traveller_name: cleanName,
+        seat_id: seatId,
+        trip_type: 'ONE_WAY',
+        price_etb: pricePerSeat,
+        payment_status: 'PENDING',
+        status: 'CONFIRMED',
+        group_ref: groupRef,
+    }))
 
-    const price = (schedule?.routes as any)?.base_price_etb ?? 0
-    const bookingRef = generateRef()
-
-    // ── STEP 4: Create a PENDING booking record ────────────────────────────
-    const { error: bookingError } = await supabaseAdmin
+    const { error: bookErr } = await supabaseAdmin
         .from('bookings')
-        .insert({
-            booking_ref: bookingRef,
-            passenger_id: passenger.id,
-            seat_traveller_name: name,
-            seat_id: seat.id,
-            trip_type: 'ONE_WAY',
-            price_etb: price,
-            payment_status: 'PENDING',
-            status: 'CONFIRMED',
-        })
+        .insert(bookingInserts)
 
-    if (bookingError) {
-        // If booking creation fails, unlock the seat
-        await supabaseAdmin.from('seats').update({ is_booked: false }).eq('id', seat.id)
+    if (bookErr) {
+        // Rollback seat locks
+        for (const seatId of lockedSeatIds) {
+            await supabaseAdmin.from('seats').update({ is_booked: false }).eq('id', seatId)
+        }
         return NextResponse.json({ error: 'Could not create booking' }, { status: 500 })
     }
 
-    // ── STEP 5: Call Chapa API to create a payment link ────────────────────
+    // ── Chapa payment ─────────────────────────────────────────────────
     const chapaRes = await fetch('https://api.chapa.co/v1/transaction/initialize', {
         method: 'POST',
         headers: {
@@ -97,17 +145,17 @@ export async function POST(req: NextRequest) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            amount: price,
+            amount: totalPrice,
             currency: 'ETB',
-            email: `bemengede.${phone}@gmail.com`,
-            first_name: name.split(' ')[0],
-            last_name: name.split(' ')[1] ?? 'N/A',
-            tx_ref: bookingRef,
+            phone_number: phone,
+            first_name: cleanName.split(' ')[0],
+            last_name: cleanName.split(' ')[1] ?? 'N/A',
+            tx_ref: groupRef,
             callback_url: `${process.env.NEXT_PUBLIC_BASE_URL}/api/webhooks/chapa`,
-            return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/ticket/${bookingRef}`,
+            return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/ticket/${groupRef}`,
             customization: {
                 title: 'Bemengede',
-                description: `Seat ${seatNumber}`,
+                description: `${seats.length} seat${seats.length > 1 ? 's' : ''} - ${seats.join(' ')}`.replace(/[^a-zA-Z0-9\s\-_.]/g, '').substring(0, 50),
             },
         }),
     })
@@ -118,6 +166,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Chapa: ' + JSON.stringify(chapaData) }, { status: 500 })
     }
 
-    // Return the Chapa checkout URL to the frontend
-    return NextResponse.json({ checkoutUrl: chapaData.data.checkout_url })
+    return NextResponse.json({
+        checkoutUrl: chapaData.data.checkout_url,
+        groupRef,
+        seatCount: seats.length,
+        totalPrice,
+    })
 }

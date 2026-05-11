@@ -19,25 +19,68 @@ export default function MyBookings() {
 
         const res = await fetch(`/api/bookings/lookup?phone=${phone}`)
         const data = await res.json()
-        setBookings(data)
+
+        // Group bookings by group_ref for display
+        const grouped: Record<string, any[]> = {}
+        const singles: any[] = []
+
+        if (Array.isArray(data)) {
+            data.forEach((b: any) => {
+                if (b.group_ref) {
+                    if (!grouped[b.group_ref]) grouped[b.group_ref] = []
+                    grouped[b.group_ref].push(b)
+                } else {
+                    singles.push(b)
+                }
+            })
+        }
+
+        // Merge groups into display items
+        const displayItems: any[] = []
+        Object.entries(grouped).forEach(([groupRef, items]) => {
+            displayItems.push({
+                ...items[0],
+                _isGroup: true,
+                _groupRef: groupRef,
+                _groupItems: items,
+                _allSeats: items.map(i => i.seats?.seat_number).filter(Boolean),
+                _totalPrice: items.reduce((s, i) => s + Number(i.price_etb || 0), 0),
+            })
+        })
+        singles.forEach(s => {
+            displayItems.push({
+                ...s,
+                _isGroup: false,
+                _allSeats: [s.seats?.seat_number].filter(Boolean),
+                _totalPrice: Number(s.price_etb || 0),
+            })
+        })
+
+        // Sort by booked_at desc
+        displayItems.sort((a, b) => new Date(b.booked_at).getTime() - new Date(a.booked_at).getTime())
+        setBookings(displayItems)
         setLoading(false)
     }
 
-    const handleCancel = async (bookingRef: string) => {
+    const handleCancel = async (ref: string) => {
         if (!confirm('Are you sure you want to cancel this booking?')) return
-        setCancellingId(bookingRef)
+        setCancellingId(ref)
 
         const res = await fetch('/api/bookings/cancel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bookingRef }),
+            body: JSON.stringify({ bookingRef: ref, phone }),
         })
         const data = await res.json()
 
         if (data.success) {
-            alert(`Cancelled!\n${data.refundMessage}\nRefund: ${data.refundAmount} ETB`)
+            const seatText = data.cancelledCount > 1 ? `${data.cancelledCount} seats` : '1 seat'
+            alert(`Cancelled ${seatText}!\n${data.refundMessage}\nRefund: ${data.refundAmount} ETB`)
+            // Refresh
             const refreshRes = await fetch(`/api/bookings/lookup?phone=${phone}`)
-            setBookings(await refreshRes.json())
+            const refreshData = await refreshRes.json()
+            // Re-process groups
+            handleLookup({ preventDefault: () => {} } as any)
         } else {
             alert('Error: ' + data.error)
         }
@@ -97,7 +140,9 @@ export default function MyBookings() {
                 {!loading && bookings.map((b, i) => {
                     const schedule = b.seats?.schedules
                     const isExpired = schedule && new Date(`${schedule.departure_date}T23:59:59`) < new Date()
-                    const isCancelled = b.status === 'CANCELLED'
+                    const isCancelled = b._isGroup
+                        ? b._groupItems.every((g: any) => g.status === 'CANCELLED')
+                        : b.status === 'CANCELLED'
 
                     let badgeClass = 'badge-pending'
                     let statusText = '⏳ Pending'
@@ -118,10 +163,13 @@ export default function MyBookings() {
                     }
 
                     const isInactive = isCancelled || isExpired
+                    const displayRef = b._isGroup ? b._groupRef : b.booking_ref
+                    const cancelRef = b._isGroup ? b._groupRef : b.booking_ref
+                    const viewRef = b._isGroup ? b._groupRef : b.booking_ref
 
                     return (
                         <div
-                            key={b.id}
+                            key={displayRef + '-' + i}
                             className={`glass animate-in animate-in-delay-${Math.min(i + 1, 5)}`}
                             style={{
                                 padding: '1.25rem',
@@ -133,10 +181,13 @@ export default function MyBookings() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <div>
                                     <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: '1rem' }}>
-                                        {b.booking_ref}
+                                        {displayRef}
                                     </p>
                                     <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '4px' }}>
-                                        Seat {b.seats?.seat_number} &nbsp;•&nbsp; {b.price_etb} ETB
+                                        {b._isGroup
+                                            ? `Seats ${b._allSeats.join(', ')} · ${b._totalPrice} ETB`
+                                            : `Seat ${b.seats?.seat_number} · ${b.price_etb} ETB`
+                                        }
                                     </p>
                                     <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '2px' }}>
                                         {b.seat_traveller_name} &nbsp;•&nbsp; {new Date(b.booked_at).toLocaleDateString()}
@@ -150,21 +201,21 @@ export default function MyBookings() {
 
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button
-                                            onClick={() => router.push(`/ticket/${b.booking_ref}`)}
-                                            className={`btn btn-sm ${isInactive ? 'btn-outline' : 'btn-outline'}`}
+                                            onClick={() => router.push(`/ticket/${viewRef}`)}
+                                            className="btn btn-sm btn-outline"
                                             style={{ fontSize: '0.75rem' }}
                                         >
                                             View
                                         </button>
 
-                                        {!isCancelled && !isExpired && b.payment_status === 'PAID' && (
+                                        {!isCancelled && !isExpired && (
                                             <button
-                                                onClick={() => handleCancel(b.booking_ref)}
-                                                disabled={cancellingId === b.booking_ref}
+                                                onClick={() => handleCancel(cancelRef)}
+                                                disabled={cancellingId === cancelRef}
                                                 className="btn btn-sm btn-danger"
                                                 style={{ fontSize: '0.75rem' }}
                                             >
-                                                {cancellingId === b.booking_ref ? '...' : 'Cancel'}
+                                                {cancellingId === cancelRef ? '...' : 'Cancel'}
                                             </button>
                                         )}
                                     </div>
